@@ -9,11 +9,13 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 
 # =========================================================
-# ✅ Run with: python shuffle_merge.py
+#  Run with: python shuffle_merge.py
 # =========================================================
 
 ROOT_DIR = Path("./dramas")
 OUTRO_VIDEO = Path("./outro.mp4")
+OUTRO_OVERLAY_START = 3.0  # outro가 overlay로 시작되는 시간 (초)
+OUTRO_OVERLAY_POSITION = "top_left"  # outro overlay 위치
 INTRO_AUDIO_FALLBACK = Path("./intro.mp3")
 INTRO_AUDIO_DIR = Path("./intro_voices")
 PRE_OUTRO_AUDIO_PATH = Path("./cta_audio.mp3")
@@ -25,6 +27,7 @@ BLACK_KEY_BLEND = 0.0
 OUTPUT_DIR = Path("./outputs")
 PICK_FOLDERS_PER_RUN = 6
 MAX_VIDEOS_PER_FOLDER = 3
+MIN_TOTAL_DURATION = 15.0  # 최소 비디오 길이 (초)
 STATE_FILE = Path(".koko_merge_state.json")
 BASE_SEED = 42
 TARGET_W = 1080
@@ -191,7 +194,7 @@ def pick_intro_audio(intro_fallback: Path, intro_dir: Path, cycle: int) -> Path:
 
 def get_zoom_speed_auto(cycle: int) -> Tuple[float, float, str]:
     p = SPEED_ZOOM_PRESETS[(cycle - 1) % len(SPEED_ZOOM_PRESETS)]
-    print(f"🤖 Auto-selecting Preset '{p['name']}' based on Cycle {cycle}")
+    print(f"Auto-selecting Preset '{p['name']}' based on Cycle {cycle}")
     return float(p["zoom"]), float(p["speed"]), p["name"]
 
 
@@ -212,7 +215,7 @@ def extract_last_frame(video_path: str, frame_png: str) -> None:
     try:
         run(cmd)
     except Exception as e:
-        print(f"⚠️ Failed to extract last frame: {e}")
+        print(f" Failed to extract last frame: {e}")
 
 
 def build_base_chain(target_w: int, target_h: int, fps: float, scale_mode: str, look_filter: Optional[str], zoom: float, speed: float) -> str:
@@ -298,12 +301,12 @@ def transcode_with_optional_overlay(in_video: str, out_video: str, target_w: int
         audio_map = "[a_out]"
 
     fc = ";".join(fc_chains)
-    # ✅ [FIX] -bf 0 추가하여 B-frame 비활성화 → 첫 프레임 검은 화면 해결
+    #  [FIX] -bf 0 추가하여 B-frame 비활성화 → 첫 프레임 검은 화면 해결
     cmd.extend(["-filter_complex", fc, "-map", current_v_label, "-map", audio_map, "-shortest", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-bf", "0", "-g", "30", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", out_video])
     run(cmd)
 
 
-# ✅ [NEW] 첫 번째 비디오 클립을 인트로로 사용 (정지 이미지 방식 폐기)
+#  [NEW] 첫 번째 비디오 클립을 인트로로 사용 (정지 이미지 방식 폐기)
 def make_intro_from_video(first_video: str, intro_audio: str, out_video: str, target_w: int, target_h: int, fps: float, scale_mode: str, look_filter: Optional[str], folder_overlay_png: Optional[str], overlay_tint_rgb: Optional[Tuple[float, float, float]], overlay_tint_strength: float, zoom: float, speed: float) -> None:
     """첫 번째 비디오 클립에 인트로 오디오를 덮어씌워 인트로 생성"""
     intro_duration = get_media_duration_seconds(intro_audio)
@@ -312,7 +315,7 @@ def make_intro_from_video(first_video: str, intro_audio: str, out_video: str, ta
     
     base = build_base_chain(target_w, target_h, fps, scale_mode, look_filter, zoom, speed)
     
-    # ✅ [FIX] -ss 0.1로 첫 0.1초 건너뛰기 (검은 화면 방지)
+    #  [FIX] -ss 0.1로 첫 0.1초 건너뛰기 (검은 화면 방지)
     cmd = ["ffmpeg", "-y", "-ss", "0.1", "-t", str(intro_duration), "-i", first_video, "-i", intro_audio]
     
     fc_chains = [f"[0:v]{base},format=rgba[v0]"]
@@ -339,14 +342,14 @@ def make_intro_from_video(first_video: str, intro_audio: str, out_video: str, ta
     fc_chains.append(audio_chain)
     
     fc = ";".join(fc_chains)
-    # ✅ [FIX] -bf 0 추가하여 B-frame 비활성화
+    #  [FIX] -bf 0 추가하여 B-frame 비활성화
     cmd.extend(["-filter_complex", fc, "-map", current_v_label, "-map", "[a_out]", "-shortest", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-bf", "0", "-g", "30", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", out_video])
     run(cmd)
 
 
 def make_static_segment(image_path: str, audio_path: str, out_video: str, target_w: int, target_h: int, fps: float, scale_mode: str, look_filter: Optional[str]) -> None:
     base = build_base_chain(target_w, target_h, fps, scale_mode, look_filter, 1.0, 1.0)
-    # ✅ [FIX] -bf 0 추가하여 B-frame 비활성화
+    #  [FIX] -bf 0 추가하여 B-frame 비활성화
     cmd = ["ffmpeg", "-y", "-loop", "1", "-i", image_path, "-i", audio_path, "-filter_complex", f"[0:v]{base},setsar=1,format=yuv420p[v];[1:a]aformat=sample_rates=48000:channel_layouts=stereo[a]", "-map", "[v]", "-map", "[a]", "-shortest", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-bf", "0", "-g", "30", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", out_video]
     run(cmd)
 
@@ -371,10 +374,66 @@ def concat_segments(file_list: List[str], output_path: str) -> None:
     run(cmd)
 
 
+def concat_with_outro_overlay(file_list: List[str], outro_path: str, output_path: str, target_w: int, target_h: int, fps: float, outro_start_time: float, outro_position: str = "top_left") -> None:
+    """
+    메인 클립들을 concat하고, 지정된 시간부터 outro를 왼쪽 위에 overlay로 표시
+    """
+    # 1) 메인 클립들을 먼저 concat
+    temp_concat = str(Path(output_path).with_suffix(".temp_concat.mp4"))
+    concat_segments(file_list, temp_concat)
+    
+    # 2) outro 길이 가져오기
+    outro_duration = get_media_duration_seconds(outro_path)
+    outro_trim_start = 1.0  # outro를 1초부터 시작
+    outro_play_duration = outro_duration - outro_trim_start
+    outro_end_time = outro_start_time + outro_play_duration
+    
+    # 3) outro 크기 조정 (작게 만들기 - 왼쪽 위에 표시할 크기)
+    outro_width = int(target_w * 0.30)  # 화면의 30% 크기
+    outro_height = int(outro_width * target_h / target_w)  # 비율 유지
+    
+    # 4) outro overlay 적용
+    # overlay 위치 계산
+    if outro_position == "top_left":
+        x_pos = 20
+        y_pos = 20
+    elif outro_position == "top_right":
+        x_pos = f"W-w-20"
+        y_pos = 20
+    elif outro_position == "bottom_left":
+        x_pos = 20
+        y_pos = f"H-h-20"
+    else:  # bottom_right
+        x_pos = f"W-w-20"
+        y_pos = f"H-h-20"
+    
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", temp_concat,
+        "-i", outro_path,
+        "-filter_complex",
+        # outro를 1초부터 trim하고, PTS를 outro_start_time부터 시작하도록 offset
+        # 이렇게 하면 overlay가 outro_start_time까지 outro 프레임을 소비하지 않음
+        f"[1:v]trim=start={outro_trim_start},setpts=PTS-STARTPTS+{outro_start_time}/TB,scale={outro_width}:{outro_height},format=rgba,fps={fps}[outro];"
+        f"[0:v][outro]overlay={x_pos}:{y_pos}:enable='between(t,{outro_start_time},{outro_end_time})':eof_action=pass,format=yuv420p[v];"
+        f"[0:a]aformat=sample_rates=48000:channel_layouts=stereo[a]",
+        "-map", "[v]",
+        "-map", "[a]",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-bf", "0", "-g", "30",
+        "-c:a", "aac", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart",
+        output_path
+    ]
+    run(cmd)
+    
+    # temp 파일 삭제
+    Path(temp_concat).unlink(missing_ok=True)
+
+
 def process_one_folder(folder: Path, output_path_tiktok: Path, output_path_prod: Path, intro_audio: Path, outro: Path, seed: int, max_videos: Optional[int], tmp_root: Path, keep_tmp: bool, target_w: int, target_h: int, scale_mode: str, look_filter: Optional[str], force_fps: Optional[float], overlay_tint_rgb: Optional[Tuple[float, float, float]], overlay_tint_strength: float, zoom: float, speed: float) -> bool:
     vids = list_files(folder, VIDEO_EXTS)
     if not vids:
-        print("⏭️  Skip (no videos):", folder)
+        print("  Skip (no videos):", folder)
         return False
 
     overlay_path = folder / "overlay.png"
@@ -382,14 +441,34 @@ def process_one_folder(folder: Path, output_path_tiktok: Path, output_path_prod:
     banner_png = str(BANNER_PATH.resolve()) if BANNER_PATH.exists() else None
 
     if folder_overlay_png is None:
-        print("⚠️  overlay.png not found in folder -> folder overlay disabled")
+        print("  overlay.png not found in folder -> folder overlay disabled")
 
     random.shuffle(vids)
-    if max_videos is not None and max_videos > 0:
-        vids = vids[:max_videos]
-
-    print("\n📁 Folder:", folder.name)
+    
+    # 15초 이상 보장하기 위해 충분한 클립 선택
+    # MAX_VIDEOS_PER_FOLDER는 무시하고 15초 달성을 우선
+    selected_vids = []
+    total_duration = 0.0
+    
+    for vid in vids:
+        selected_vids.append(vid)
+        try:
+            vid_duration = get_media_duration_seconds(str(vid))
+            # speed 적용 후 실제 재생 시간
+            total_duration += vid_duration / speed
+        except Exception:
+            # duration을 가져올 수 없으면 평균 4초로 가정
+            total_duration += 4.0
+        
+        # 최소 15초 달성할 때까지 계속 추가
+        if total_duration >= MIN_TOTAL_DURATION:
+            break
+    
+    vids = selected_vids
+    
+    print("\n Folder:", folder.name)
     print("Clips:", len(vids))
+    print(f"Expected clips duration: ~{total_duration:.1f}s")
 
     tmpdir = tmp_root / safe_stem(folder.name)
     if tmpdir.exists():
@@ -400,7 +479,7 @@ def process_one_folder(folder: Path, output_path_tiktok: Path, output_path_prod:
     _, _, detected_fps = get_video_props(first_video)
     fps = float(force_fps) if force_fps is not None else float(detected_fps)
 
-    # ✅ [NEW] 첫 번째 비디오 클립을 인트로로 사용 (정지 이미지 방식 폐기)
+    #  [NEW] 첫 번째 비디오 클립을 인트로로 사용 (정지 이미지 방식 폐기)
     intro_norm_tiktok = str((tmpdir / "norm_00_intro_tk.mp4").resolve())
     make_intro_from_video(first_video, str(intro_audio), intro_norm_tiktok, target_w, target_h, fps, scale_mode, look_filter, folder_overlay_png, overlay_tint_rgb, overlay_tint_strength, zoom, speed)
 
@@ -417,30 +496,29 @@ def process_one_folder(folder: Path, output_path_tiktok: Path, output_path_prod:
         transcode_with_optional_overlay(str(vp), outp_pd, target_w, target_h, fps, scale_mode, look_filter, folder_overlay_png, True, overlay_tint_rgb, overlay_tint_strength, None, 0.0, zoom, speed)
         normalized_body_prod.append(outp_pd)
 
-    pre_outro_seg = []
-    if normalized_body_tiktok and PRE_OUTRO_AUDIO_PATH.exists():
-        last_clip_path = normalized_body_tiktok[-1]
-        last_frame_path = str((tmpdir / "last_frame_for_cta.png").resolve())
-        extract_last_frame(last_clip_path, last_frame_path)
-        if Path(last_frame_path).exists():
-            pre_outro_video = str((tmpdir / "norm_99_pre_outro.mp4").resolve())
-            make_static_segment(last_frame_path, str(PRE_OUTRO_AUDIO_PATH), pre_outro_video, target_w, target_h, fps, scale_mode, None)
-            pre_outro_seg = [pre_outro_video]
-        else:
-            print("⚠️ Last frame extraction failed -> skipping CTA segment")
+    # CTA 세그먼트 제거 (사용하지 않음)
+    # pre_outro_seg = []
+    # if normalized_body_tiktok and PRE_OUTRO_AUDIO_PATH.exists():
+    #     last_clip_path = normalized_body_tiktok[-1]
+    #     last_frame_path = str((tmpdir / "last_frame_for_cta.png").resolve())
+    #     extract_last_frame(last_clip_path, last_frame_path)
+    #     if Path(last_frame_path).exists():
+    #         pre_outro_video = str((tmpdir / "norm_99_pre_outro.mp4").resolve())
+    #         make_static_segment(last_frame_path, str(PRE_OUTRO_AUDIO_PATH), pre_outro_video, target_w, target_h, fps, scale_mode, None)
+    #         pre_outro_seg = [pre_outro_video]
+    #     else:
+    #         print(" Last frame extraction failed -> skipping CTA segment")
 
-    outro_norm = str((tmpdir / f"norm_{len(vids)+1:02d}_outro.mp4").resolve())
-    transcode_with_optional_overlay(str(outro), outro_norm, target_w, target_h, fps, scale_mode, None, None, False, None, 0.0, None, 0.0, 1.0, 1.0)
-
+    # [NEW] outro를 별도 세그먼트가 아니라 overlay로 처리 (CTA 없이)
     output_path_tiktok.parent.mkdir(parents=True, exist_ok=True)
-    list_tiktok = [intro_norm_tiktok] + normalized_body_tiktok + pre_outro_seg + [outro_norm]
-    concat_segments(list_tiktok, str(output_path_tiktok))
-    print("✅ Done (TikTok):", output_path_tiktok.name)
+    list_tiktok = [intro_norm_tiktok] + normalized_body_tiktok
+    concat_with_outro_overlay(list_tiktok, str(outro), str(output_path_tiktok), target_w, target_h, fps, OUTRO_OVERLAY_START, OUTRO_OVERLAY_POSITION)
+    print(" Done (TikTok):", output_path_tiktok.name)
 
     output_path_prod.parent.mkdir(parents=True, exist_ok=True)
-    list_prod = normalized_body_prod + pre_outro_seg + [outro_norm]
-    concat_segments(list_prod, str(output_path_prod))
-    print("✅ Done (Production):", output_path_prod.name)
+    list_prod = normalized_body_prod
+    concat_with_outro_overlay(list_prod, str(outro), str(output_path_prod), target_w, target_h, fps, OUTRO_OVERLAY_START, OUTRO_OVERLAY_POSITION)
+    print(" Done (Production):", output_path_prod.name)
 
     if not keep_tmp:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -458,9 +536,9 @@ def main() -> None:
         if not (INTRO_AUDIO_DIR.exists() and INTRO_AUDIO_DIR.is_dir() and list_files(INTRO_AUDIO_DIR, AUDIO_EXTS)):
             die(f"Intro audio not found: {INTRO_AUDIO_FALLBACK.resolve()}")
     if not BANNER_PATH.exists():
-        print(f"⚠️ Warning: Banner image not found.")
+        print(f" Warning: Banner image not found.")
     if not PRE_OUTRO_AUDIO_PATH.exists():
-        print(f"⚠️ Warning: Pre-Outro audio not found.")
+        print(f" Warning: Pre-Outro audio not found.")
 
     prod_dir = OUTPUT_DIR / "production"
     tk_dir = OUTPUT_DIR / "tiktok"
@@ -510,10 +588,10 @@ def main() -> None:
     done_names.update(processed_names)
     if done_names == eligible_names:
         save_state(STATE_FILE, {"cycle": cycle + 1, "done": []})
-        print(f"\n✅ Cycle complete -> next cycle: {cycle + 1}")
+        print(f"\n Cycle complete -> next cycle: {cycle + 1}")
     else:
         save_state(STATE_FILE, {"cycle": cycle, "done": sorted(done_names)})
-        print(f"\n✅ State saved. Remaining: {len(eligible_names) - len(done_names)}")
+        print(f"\n State saved. Remaining: {len(eligible_names) - len(done_names)}")
 
 
 if __name__ == "__main__":
