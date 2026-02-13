@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple, Dict, Any
 ROOT_DIR = Path("./dramas")
 OUTRO_VIDEO = Path("./outro.mp4")
 OUTRO_OVERLAY_START = 3.0  # outro가 overlay로 시작되는 시간 (초)
-OUTRO_OVERLAY_POSITION = "top_left"  # outro overlay 위치
+OUTRO_OVERLAY_POSITION = "top_right"  # outro overlay 위치
 INTRO_AUDIO_FALLBACK = Path("./intro.mp3")
 INTRO_AUDIO_DIR = Path("./intro_voices")
 PRE_OUTRO_AUDIO_PATH = Path("./cta_audio.mp3")
