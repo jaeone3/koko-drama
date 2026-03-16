@@ -14,8 +14,8 @@ from typing import List, Optional, Tuple, Dict, Any
 
 ROOT_DIR = Path("./dramas")
 OUTRO_VIDEO = Path("./outro.mp4")
-OUTRO_OVERLAY_START = 3.0  # outro가 overlay로 시작되는 시간 (초)
-OUTRO_OVERLAY_POSITION = "top_right"  # outro overlay 위치
+OUTRO_OVERLAY_SCALE = 0.80  # outro overlay 크기 (화면 대비 비율 80%)
+OUTRO_TRIM_START = 1.0  # outro 영상 시작 트림 (초)
 INTRO_AUDIO_FALLBACK = Path("./intro.mp3")
 INTRO_AUDIO_DIR = Path("./intro_voices")
 PRE_OUTRO_AUDIO_PATH = Path("./cta_audio.mp3")
@@ -283,7 +283,7 @@ def transcode_with_optional_overlay(in_video: str, out_video: str, target_w: int
             banner_chain += f",colorkey=0x000000:{BLACK_KEY_SIMILARITY}:{BLACK_KEY_BLEND}"
         fc_chains.append(f"{banner_chain}[ov_banner]")
         next_v_label = "[v_final_banner]"
-        fc_chains.append(f"{current_v_label}[ov_banner]overlay=0:0:format=auto:enable='gte(t,{banner_delay})',format=yuv420p{next_v_label}")
+        fc_chains.append(f"{current_v_label}[ov_banner]overlay=0:0:format=auto:enable='gte(t,{banner_delay})',setsar=1,format=yuv420p{next_v_label}")
         current_v_label = next_v_label
         next_input_file_idx += 1
     else:
@@ -374,58 +374,100 @@ def concat_segments(file_list: List[str], output_path: str) -> None:
     run(cmd)
 
 
-def concat_with_outro_overlay(file_list: List[str], outro_path: str, output_path: str, target_w: int, target_h: int, fps: float, outro_start_time: float, outro_position: str = "top_left") -> None:
+def concat_with_outro_overlay(file_list: List[str], outro_path: str, output_path: str, target_w: int, target_h: int, fps: float, cta_audio_path: Optional[str] = None) -> None:
     """
-    메인 클립들을 concat하고, 지정된 시간부터 outro를 왼쪽 위에 overlay로 표시
+    드라마 클립 concat → CTA 오디오 + outro overlay 적용.
+
+    타임라인 (드라마 클립 15초+ 기준):
+      0 ~ cta_start       : 드라마 오디오 ON
+      cta_start ~ outro_start : CTA 오디오 (드라마 오디오 OFF)
+      outro_start ~ 끝     : outro overlay (중앙 61%) + outro 오디오 (드라마 오디오 OFF)
     """
-    # 1) 메인 클립들을 먼저 concat
+    # 1) 드라마 클립 concat
     temp_concat = str(Path(output_path).with_suffix(".temp_concat.mp4"))
     concat_segments(file_list, temp_concat)
-    
-    # 2) outro 길이 가져오기
-    outro_duration = get_media_duration_seconds(outro_path)
-    outro_trim_start = 1.0  # outro를 1초부터 시작
-    outro_play_duration = outro_duration - outro_trim_start
-    outro_end_time = outro_start_time + outro_play_duration
-    
-    # 3) outro 크기 조정 (작게 만들기 - 왼쪽 위에 표시할 크기)
-    outro_width = int(target_w * 0.30)  # 화면의 30% 크기
-    outro_height = int(outro_width * target_h / target_w)  # 비율 유지
-    
-    # 4) outro overlay 적용
-    # overlay 위치 계산
-    if outro_position == "top_left":
-        x_pos = 20
-        y_pos = 20
-    elif outro_position == "top_right":
-        x_pos = f"W-w-20"
-        y_pos = 20
-    elif outro_position == "bottom_left":
-        x_pos = 20
-        y_pos = f"H-h-20"
-    else:  # bottom_right
-        x_pos = f"W-w-20"
-        y_pos = f"H-h-20"
-    
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", temp_concat,
-        "-i", outro_path,
-        "-filter_complex",
-        # outro를 1초부터 trim하고, PTS를 outro_start_time부터 시작하도록 offset
-        # 이렇게 하면 overlay가 outro_start_time까지 outro 프레임을 소비하지 않음
-        f"[1:v]trim=start={outro_trim_start},setpts=PTS-STARTPTS+{outro_start_time}/TB,scale={outro_width}:{outro_height},format=rgba,fps={fps}[outro];"
-        f"[0:v][outro]overlay={x_pos}:{y_pos}:enable='between(t,{outro_start_time},{outro_end_time})':eof_action=pass,format=yuv420p[v];"
-        f"[0:a]aformat=sample_rates=48000:channel_layouts=stereo[a]",
-        "-map", "[v]",
-        "-map", "[a]",
+
+    # 2) 고정 길이 계산
+    total_dur = get_media_duration_seconds(temp_concat)
+    outro_full_dur = get_media_duration_seconds(outro_path)
+    outro_play_dur = outro_full_dur - OUTRO_TRIM_START
+
+    cta_dur = 0.0
+    has_cta = cta_audio_path and Path(cta_audio_path).exists()
+    if has_cta:
+        cta_dur = get_media_duration_seconds(cta_audio_path)
+
+    # 3) 시작 시점 계산 (뒤에서부터 고정 길이를 뺌)
+    outro_start = max(0, total_dur - outro_play_dur)
+    cta_start = max(0, outro_start - cta_dur)
+    outro_end = total_dur
+
+    print(f"  Timeline: drama_audio=0~{cta_start:.1f}s | CTA={cta_start:.1f}~{outro_start:.1f}s | outro={outro_start:.1f}~{outro_end:.1f}s")
+
+    # 4) outro overlay 크기 (61%) & 위치 (중앙)
+    outro_w = int(target_w * OUTRO_OVERLAY_SCALE)
+    outro_h = int(outro_w * target_h / target_w)
+
+    # 5) FFmpeg 명령 구성
+    cmd = ["ffmpeg", "-y", "-i", temp_concat, "-i", outro_path]
+    input_idx = 2
+
+    # --- Video filter: outro overlay ---
+    # outro PTS를 outro_start 시점으로 이동 → overlay가 자동으로 해당 시점부터 표시
+    vf_parts = [
+        f"[1:v]trim=start={OUTRO_TRIM_START},setpts=PTS-STARTPTS+{outro_start}/TB,"
+        f"scale={outro_w}:{outro_h},fps={fps}[outro_v]",
+        f"[0:v][outro_v]overlay=(W-w)/2:(H-h)/2:"
+        f"eof_action=pass,format=yuv420p[v]"
+    ]
+
+    # --- Audio filter ---
+    # 믹싱할 오디오 수 (amix 볼륨 보정용)
+    mix_count = 3 if has_cta else 2
+
+    # 드라마 오디오: cta_start 이후 음소거, 볼륨 보정(x mix_count)
+    af_parts = [
+        f"[0:a]volume=0:enable='gte(t,{cta_start})',"
+        f"volume={mix_count},aformat=sample_rates=48000:channel_layouts=stereo[drama_a]"
+    ]
+    audio_labels = ["[drama_a]"]
+
+    # CTA 오디오: cta_start 시점에 삽입
+    if has_cta:
+        cmd.extend(["-i", cta_audio_path])
+        cta_start_ms = int(cta_start * 1000)
+        af_parts.append(
+            f"[{input_idx}:a]adelay={cta_start_ms}|{cta_start_ms},"
+            f"volume={mix_count},aformat=sample_rates=48000:channel_layouts=stereo[cta_a]"
+        )
+        audio_labels.append("[cta_a]")
+        input_idx += 1
+
+    # outro 오디오: outro_start 시점에 삽입 (1초 트림 후)
+    outro_start_ms = int(outro_start * 1000)
+    af_parts.append(
+        f"[1:a]atrim=start={OUTRO_TRIM_START},asetpts=PTS-STARTPTS,"
+        f"adelay={outro_start_ms}|{outro_start_ms},"
+        f"volume={mix_count},aformat=sample_rates=48000:channel_layouts=stereo[outro_a]"
+    )
+    audio_labels.append("[outro_a]")
+
+    # amix: 겹치지 않는 오디오 스트림 믹싱
+    af_parts.append(
+        f"{''.join(audio_labels)}amix=inputs={mix_count}:duration=first:dropout_transition=0[a]"
+    )
+
+    fc = ";".join(vf_parts + af_parts)
+    cmd.extend([
+        "-filter_complex", fc,
+        "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-bf", "0", "-g", "30",
         "-c:a", "aac", "-ar", "48000", "-ac", "2",
         "-movflags", "+faststart",
         output_path
-    ]
+    ])
     run(cmd)
-    
+
     # temp 파일 삭제
     Path(temp_concat).unlink(missing_ok=True)
 
@@ -496,28 +538,18 @@ def process_one_folder(folder: Path, output_path_tiktok: Path, output_path_prod:
         transcode_with_optional_overlay(str(vp), outp_pd, target_w, target_h, fps, scale_mode, look_filter, folder_overlay_png, True, overlay_tint_rgb, overlay_tint_strength, None, 0.0, zoom, speed)
         normalized_body_prod.append(outp_pd)
 
-    # CTA 세그먼트 제거 (사용하지 않음)
-    # pre_outro_seg = []
-    # if normalized_body_tiktok and PRE_OUTRO_AUDIO_PATH.exists():
-    #     last_clip_path = normalized_body_tiktok[-1]
-    #     last_frame_path = str((tmpdir / "last_frame_for_cta.png").resolve())
-    #     extract_last_frame(last_clip_path, last_frame_path)
-    #     if Path(last_frame_path).exists():
-    #         pre_outro_video = str((tmpdir / "norm_99_pre_outro.mp4").resolve())
-    #         make_static_segment(last_frame_path, str(PRE_OUTRO_AUDIO_PATH), pre_outro_video, target_w, target_h, fps, scale_mode, None)
-    #         pre_outro_seg = [pre_outro_video]
-    #     else:
-    #         print(" Last frame extraction failed -> skipping CTA segment")
+    # CTA 오디오 경로
+    cta_audio = str(PRE_OUTRO_AUDIO_PATH) if PRE_OUTRO_AUDIO_PATH.exists() else None
 
-    # [NEW] outro를 별도 세그먼트가 아니라 overlay로 처리 (CTA 없이)
+    # 최종 조립: 드라마 클립 + CTA 오디오 + outro overlay
     output_path_tiktok.parent.mkdir(parents=True, exist_ok=True)
     list_tiktok = [intro_norm_tiktok] + normalized_body_tiktok
-    concat_with_outro_overlay(list_tiktok, str(outro), str(output_path_tiktok), target_w, target_h, fps, OUTRO_OVERLAY_START, OUTRO_OVERLAY_POSITION)
+    concat_with_outro_overlay(list_tiktok, str(outro), str(output_path_tiktok), target_w, target_h, fps, cta_audio)
     print(" Done (TikTok):", output_path_tiktok.name)
 
     output_path_prod.parent.mkdir(parents=True, exist_ok=True)
     list_prod = normalized_body_prod
-    concat_with_outro_overlay(list_prod, str(outro), str(output_path_prod), target_w, target_h, fps, OUTRO_OVERLAY_START, OUTRO_OVERLAY_POSITION)
+    concat_with_outro_overlay(list_prod, str(outro), str(output_path_prod), target_w, target_h, fps, cta_audio)
     print(" Done (Production):", output_path_prod.name)
 
     if not keep_tmp:
