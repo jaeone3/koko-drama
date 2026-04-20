@@ -14,7 +14,7 @@ from typing import List, Optional, Tuple, Dict, Any
 
 ROOT_DIR = Path("./dramas")
 OUTRO_VIDEO = Path("./outro.mp4")
-OUTRO_OVERLAY_SCALE = 0.80  # outro overlay 크기 (화면 대비 비율 80%)
+OUTRO_OVERLAY_SCALE = 0.35  # outro overlay 크기 (화면 대비 비율 35%)
 OUTRO_TRIM_START = 1.0  # outro 영상 시작 트림 (초)
 INTRO_AUDIO_FALLBACK = Path("./intro.mp3")
 INTRO_AUDIO_DIR = Path("./intro_voices")
@@ -25,7 +25,7 @@ MAKE_BLACK_TRANSPARENT = True
 BLACK_KEY_SIMILARITY = 0.08
 BLACK_KEY_BLEND = 0.0
 OUTPUT_DIR = Path("./outputs")
-PICK_FOLDERS_PER_RUN = 6
+PICK_FOLDERS_PER_RUN = 7
 MAX_VIDEOS_PER_FOLDER = 3
 MIN_TOTAL_DURATION = 15.0  # 최소 비디오 길이 (초)
 STATE_FILE = Path(".koko_merge_state.json")
@@ -417,7 +417,7 @@ def concat_with_outro_overlay(file_list: List[str], outro_path: str, output_path
     vf_parts = [
         f"[1:v]trim=start={OUTRO_TRIM_START},setpts=PTS-STARTPTS+{outro_start}/TB,"
         f"scale={outro_w}:{outro_h},fps={fps}[outro_v]",
-        f"[0:v][outro_v]overlay=(W-w)/2:(H-h)/2:"
+        f"[0:v][outro_v]overlay=W-w-20:20:"
         f"eof_action=pass,format=yuv420p[v]"
     ]
 
@@ -595,7 +595,7 @@ def main() -> None:
 
     remaining = [sf for sf in eligible_folders if sf.name not in done_names]
     k = min(PICK_FOLDERS_PER_RUN, len(remaining))
-    picked = remaining[:k]
+    picked = random.sample(remaining, k)
 
     look_name, look_filter = cycle_look(cycle)
     chosen_intro = pick_intro_audio(INTRO_AUDIO_FALLBACK, INTRO_AUDIO_DIR, cycle)
